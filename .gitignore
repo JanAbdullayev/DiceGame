@@ -1,0 +1,11 @@
+# Dependency folders
+node_modules/
+
+# Local database files (CRITICAL for Railway)
+dice_pot.db
+dice_pot.db-journal
+
+# Logs and OS files
+npm-debug.log*
+.DS_Store
+Thumbs.db
