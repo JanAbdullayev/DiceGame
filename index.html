@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dice Pot - Live</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root { --bg: #05070a; --panel: #0d1117; --accent: #00d4ff; --win: #238636; --border: #30363d; --text: #c9d1d9; }
+        body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+
+        /* HUD & OVERLAYS */
+        #hud { display: none; position: fixed; top: 0; left: 0; right: 0; height: 60px; background: var(--panel); border-bottom: 1px solid var(--border); justify-content: space-between; align-items: center; padding: 0 30px; z-index: 1000; }
+        .hud-balance { font-family: monospace; font-size: 1.2rem; color: var(--win); }
+
+        .overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .box { background: var(--panel); padding: 40px; border: 1px solid var(--border); border-radius: 12px; width: 400px; text-align: center; }
+        
+        input { width: 100%; padding: 12px; margin: 10px 0; background: #010409; color: white; border: 1px solid var(--border); border-radius: 4px; }
+        .btn { width: 100%; padding: 12px; background: transparent; color: var(--accent); border: 1px solid var(--accent); cursor: pointer; text-transform: uppercase; font-weight: bold; transition: 0.3s; }
+        .btn:hover { background: rgba(0, 212, 255, 0.1); }
+        .btn-main { background: var(--accent); color: black; border: none; }
+
+        #screen-browser { display: none; position: fixed; inset: 60px 0 0 0; padding: 40px; justify-content: center; gap: 40px; overflow-y: auto; background: var(--bg); z-index: 500;}
+        .lobby-card { background: var(--panel); border: 1px solid var(--border); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+
+        /* GAME GRID */
+        .game-container { display: none; grid-template-columns: 350px 1fr 350px; height: calc(100vh - 60px); margin-top: 60px; }
+        .side-panel { background: var(--panel); border: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; /* Fix for chat scroll */ }
+        
+        #chat-box { flex-grow: 1; min-height: 0; padding: 15px; overflow-y: auto; font-size: 0.9rem; }
+
+        .table-area { display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        .turn-header { font-size: 2.5rem; font-weight: 900; text-transform: uppercase; margin-bottom: 10px; text-shadow: 0 0 15px rgba(0,212,255,0.5); text-align: center;}
+        
+        .timer-bar-bg { width: 300px; height: 4px; background: #222; margin-bottom: 50px; position: relative; }
+        .timer-bar-fill { height: 100%; background: var(--accent); width: 100%; transition: width 10s linear; }
+
+        .dice-container { display: flex; gap: 20px; margin-bottom: 40px; height: 120px; }
+        .dice-box { width: 100px; height: 100px; background: white; color: black; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 3.5rem; font-weight: bold; }
+
+        .stats-row { display: flex; gap: 100px; margin-top: 50px; text-align: center; }
+        .stat-val { font-size: 2rem; font-weight: bold; display: block; }
+        .stat-lbl { font-size: 0.8rem; color: #8b949e; text-transform: uppercase; }
+
+        /* LIST STYLES */
+        .list-section-title { padding: 10px 15px; font-size: 0.75rem; color: #8b949e; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; background: #111; }
+        
+        /* Base Card */
+        .p-card { background: transparent; padding: 12px 15px; display: flex; align-items: center; position: relative; border: 1px solid transparent; border-radius: 4px; margin-bottom: 4px; }
+        
+        /* Status Highlights */
+        .p-card.active { border: 1px solid var(--accent); background: rgba(0, 212, 255, 0.05); }
+        .p-card.winner { border: 1px solid var(--win); background: rgba(35, 134, 54, 0.2); }
+        
+        /* Self Styling */
+        .p-card.me { background: rgba(255, 255, 255, 0.1); }
+        .p-card.me b { text-decoration: underline; text-underline-offset: 4px; }
+        .p-card.me.active { background: rgba(0, 212, 255, 0.15); } 
+        .p-card.me.winner { background: rgba(35, 134, 54, 0.3); }
+
+        .p-card.faded { opacity: 0.5; }
+        .p-icon { margin-right: 10px; font-size: 1.1rem; width: 24px; text-align: center; display: inline-block; text-decoration: none !important; }
+        .p-roll-tag { margin-left: auto; font-weight: bold; color: var(--accent); font-size: 1.2rem; }
+
+        #game-bet-modal { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.85); z-index: 200; align-items: center; justify-content: center; }
+        
+        @keyframes shake { 0% { transform: translate(2px, 2px); } 50% { transform: translate(-2px, -2px); } 100% { transform: translate(0); } }
+        .shaking { animation: shake 0.1s infinite; }
+    </style>
+</head>
+<body>
+
+<header id="hud">
+    <div>USER: <span id="hud-nick" style="color:var(--accent)">?</span></div>
+    <div class="hud-balance" id="hud-balance">0 ₽</div>
+</header>
+
+<div id="screen-auth" class="overlay">
+    <div class="box">
+        <h1 style="letter-spacing:5px">DICE POT</h1>
+        <input type="text" id="auth-nick" placeholder="Name_Surname">
+        <input type="password" id="auth-pass" placeholder="Password">
+        <button class="btn btn-main" onclick="login()">Connect</button>
+    </div>
+</div>
+
+<div id="screen-browser">
+    <div style="width:500px"><h2>LOBBIES</h2><div id="lobby-rows"></div></div>
+    <div style="width:300px">
+        <h3>NEW ROOM</h3>
+        <input id="new-lobby-name" placeholder="Name">
+        <button class="btn btn-main" onclick="socket.emit('create_lobby', document.getElementById('new-lobby-name').value)">CREATE</button>
+        <button class="btn" style="margin-top:10px" onclick="socket.emit('get_lobbies')">REFRESH</button>
+    </div>
+</div>
+
+<div class="game-container" id="screen-game">
+    <aside class="side-panel">
+        <div style="padding:15px; font-weight:bold; border-bottom:1px solid var(--border)">ЧАТ</div>
+        <div id="chat-box"></div>
+        <div style="padding:15px; display:flex; gap:10px">
+            <input id="chat-msg" style="margin:0" placeholder="..." onkeydown="if(event.key==='Enter')sendMsg()">
+            <button class="btn" onclick="sendMsg()" style="width:60px">></button>
+        </div>
+    </aside>
+
+    <main class="table-area">
+        <div id="game-bet-modal">
+            <div class="box" style="width:280px">
+                <h3>SET TABLE BET</h3>
+                <input type="number" id="in-game-bet-input" placeholder="Amount...">
+                <button class="btn btn-main" onclick="confirmBet()">CONFIRM</button>
+                <button class="btn" style="margin-top:10px; border:none" onclick="toggleBetModal(false)">CLOSE</button>
+            </div>
+        </div>
+
+        <div class="turn-header" id="turn-display">WAITING...</div>
+        <div class="timer-bar-bg"><div id="timer-fill" class="timer-bar-fill"></div></div>
+
+        <div class="dice-container" id="dice-view" style="visibility:hidden">
+            <div id="d1" class="dice-box">?</div>
+            <div id="d2" class="dice-box">?</div>
+        </div>
+
+        <button id="btn-roll" class="btn" style="width:250px; display:none" onclick="socket.emit('roll_dice')">БРОСИТЬ КОСТИ</button>
+        <button id="btn-open-table" class="btn" style="width:250px; display:none" onclick="toggleBetModal(true)">OPEN TABLE</button>
+        <button id="btn-join-table" class="btn btn-main" style="width:250px; display:none" onclick="socket.emit('join_table')">JOIN TABLE</button>
+        <button id="btn-start-game" class="btn btn-main" style="width:250px; display:none" onclick="socket.emit('start_game')">START GAME</button>
+
+        <div class="stats-row">
+            <div><span class="stat-lbl">СТАВКА</span><span class="stat-val" id="ui-bet">0 ₽</span></div>
+            <div><span class="stat-lbl">БАНК</span><span class="stat-val" id="ui-pot">0 ₽</span></div>
+        </div>
+    </main>
+
+    <aside class="side-panel">
+        <div style="padding:15px; font-weight:bold; border-bottom:1px solid var(--border)">PLAYERS</div>
+        <div id="user-list-wrapper" style="overflow-y:auto; flex-grow:1">
+            <div class="list-section-title">Table</div>
+            <div id="table-players"></div>
+            <div style="height:1px; background:var(--border); margin:5px 0"></div>
+            <div class="list-section-title">Spectators</div>
+            <div id="room-spectators"></div>
+        </div>
+        <button id="btn-exit" class="btn" style="margin:15px; border-color:#444; color:#888" onclick="leaveRoom()">EXIT ROOM</button>
+    </aside>
+</div>
+
+<script>
+    const socket = io();
+    let myNick = "";
+
+    function login() {
+        const nick = document.getElementById('auth-nick').value;
+        const pass = document.getElementById('auth-pass').value;
+        socket.emit('auth', { nickname: nick, password: pass });
+    }
+
+    function leaveRoom() { socket.emit('leave_lobby'); }
+
+    socket.on('left_lobby_success', () => {
+        document.getElementById('screen-game').style.display = 'none';
+        document.getElementById('screen-browser').style.display = 'flex';
+        socket.emit('get_lobbies');
+    });
+
+    function toggleBetModal(show) { document.getElementById('game-bet-modal').style.display = show ? 'flex' : 'none'; }
+    function confirmBet() {
+        const val = document.getElementById('in-game-bet-input').value;
+        if(val) { socket.emit('host_set_bet', val); toggleBetModal(false); }
+    }
+
+    socket.on('auth_success', u => {
+        myNick = u.nickname;
+        document.getElementById('hud').style.display = 'flex';
+        document.getElementById('hud-nick').innerText = u.nickname;
+        document.getElementById('hud-balance').innerText = u.balance.toLocaleString() + ' ₽';
+        document.getElementById('screen-auth').style.display = 'none';
+        document.getElementById('screen-browser').style.display = 'flex';
+    });
+
+    socket.on('balance_update', bal => {
+        document.getElementById('hud-balance').innerText = bal.toLocaleString() + ' ₽';
+    });
+
+    socket.on('lobby_list', list => {
+        document.getElementById('lobby-rows').innerHTML = list.map(l => `
+            <div class="lobby-card">
+                <div><b>${l.name}</b><br><small>${l.host} | ${l.users} Users</small></div>
+                <button class="btn" style="width:80px" onclick="socket.emit('join_lobby', '${l.id}')">JOIN</button>
+            </div>`).join('');
+    });
+
+    socket.on('joined_lobby', () => {
+        document.getElementById('screen-browser').style.display = 'none';
+        document.getElementById('screen-game').style.display = 'grid';
+    });
+
+    socket.on('update_room', data => {
+        document.getElementById('screen-browser').style.display = 'none';
+        document.getElementById('ui-bet').innerText = data.bet.toLocaleString() + ' ₽';
+        document.getElementById('ui-pot').innerText = data.pot.toLocaleString() + ' ₽';
+        
+        const isTableHost = data.tableHostId === socket.id;
+        const amIPlaying = data.players.find(p => p.id === socket.id);
+
+        // HIDE EXIT BUTTON IF PLAYING
+        const exitBtn = document.getElementById('btn-exit');
+        if (amIPlaying) exitBtn.style.display = 'none';
+        else exitBtn.style.display = 'block';
+
+        document.getElementById('btn-open-table').style.display = 'none';
+        document.getElementById('btn-join-table').style.display = 'none';
+        document.getElementById('btn-start-game').style.display = 'none';
+
+        if (data.state === 'IDLE' || data.state === 'FINISHED') {
+            if (!data.tableHostId || isTableHost) {
+                document.getElementById('btn-open-table').style.display = 'block';
+                document.getElementById('btn-open-table').innerText = isTableHost ? "NEW GAME (BET)" : "OPEN TABLE";
+            }
+            document.getElementById('turn-display').innerText = data.state === 'FINISHED' ? "GAME OVER" : "WAITING";
+        } 
+        else if (data.state === 'BETTING') {
+            if (!amIPlaying) document.getElementById('btn-join-table').style.display = 'block';
+            if (isTableHost && amIPlaying && data.players.length >= 2) {
+                document.getElementById('btn-start-game').style.display = 'block';
+            }
+            document.getElementById('turn-display').innerText = "PREPARING...";
+        }
+
+        const tableArea = document.getElementById('table-players');
+        const specArea = document.getElementById('room-spectators');
+        tableArea.innerHTML = ''; specArea.innerHTML = '';
+
+        data.users.forEach(u => {
+            const player = data.players.find(p => p.id === u.id);
+            const active = data.currentTurn === u.id;
+            const isTH = data.tableHostId === u.id;
+            const isMe = u.nickname === myNick;
+            const isWinner = data.lastWinnerId === u.id;
+
+            let icon = '👁️';
+            if (isTH) icon = '👑';
+            else if (player) icon = '👤';
+
+            // Right side: Roll number OR Dice Icon
+            let rightSide = '';
+            if (player) {
+                if(player.lastRoll) rightSide = `<span class="p-roll-tag">${player.lastRoll}</span>`;
+                else rightSide = `<span class="p-roll-tag">🎲</span>`;
+            }
+
+            const html = `
+                <div class="p-card ${active ? 'active' : ''} ${isWinner ? 'winner' : ''} ${isMe ? 'me' : ''} ${!player ? 'faded' : ''}">
+                    <span class="p-icon">${icon}</span>
+                    <b>${u.nickname}</b>
+                    ${rightSide}
+                </div>`;
+
+            if (player) tableArea.innerHTML += html;
+            else specArea.innerHTML += html;
+        });
+    });
+
+    socket.on('turn_notification', data => {
+        document.getElementById('turn-display').innerText = data.nickname === myNick ? 'YOUR TURN' : data.nickname.toUpperCase();
+        document.getElementById('btn-roll').style.display = (data.playerId === socket.id) ? 'block' : 'none';
+        document.getElementById('dice-view').style.visibility = 'hidden';
+        const fill = document.getElementById('timer-fill');
+        fill.style.transition = 'none'; fill.style.width = '100%';
+        setTimeout(() => { fill.style.transition = 'width 10s linear'; fill.style.width = '0%'; }, 50);
+    });
+
+    socket.on('dice_rolled', data => {
+        document.getElementById('btn-roll').style.display = 'none';
+        const d1 = document.getElementById('d1'); const d2 = document.getElementById('d2');
+        document.getElementById('dice-view').style.visibility = 'visible';
+        
+        d1.classList.add('shaking'); d2.classList.add('shaking');
+        let i = setInterval(() => { d1.innerText = Math.floor(Math.random()*6)+1; d2.innerText = Math.floor(Math.random()*6)+1; }, 80);
+        setTimeout(() => { clearInterval(i); d1.classList.remove('shaking'); d2.classList.remove('shaking'); d1.innerText = data.d1; d2.innerText = data.d2; }, 1500);
+    });
+
+    socket.on('game_over', data => { document.getElementById('turn-display').innerText = `${data.winner} WINS!`; });
+    
+    function sendMsg() {
+        const m = document.getElementById('chat-msg');
+        if(m.value) { socket.emit('send_msg', m.value); m.value = ''; }
+    }
+    socket.on('chat_msg', d => {
+        const b = document.getElementById('chat-box');
+        const color = d.nick === 'GAME' ? 'var(--accent)' : (d.nick === 'SYSTEM' || d.nick === '🏆' ? 'var(--gold)' : 'var(--text)');
+        b.innerHTML += `<div><b style="color:${color}">${d.nick}:</b> ${d.text}</div>`;
+        b.scrollTop = b.scrollHeight;
+    });
+    socket.on('error_msg', m => alert(m));
+</script>
+</body>
+</html>
